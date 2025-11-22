@@ -1,0 +1,1 @@
+This is the beginning of the Teensy project, getting inital commit.
