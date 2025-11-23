@@ -1,0 +1,45 @@
+import sounddevice as sd
+import serial
+import numpy as np
+
+SERIAL_PORT = 'COM3'  # Update with your serial port
+BAUD_RATE = 115200
+AUDIO_SAMPLE_RATE = 44100
+AUDIO_BLOCK_SIZE = 1024
+SERIAL_TIMEOUT = 1  # seconds
+AUDIO_DURATION = 10  # seconds
+SENSITIVITY = 10.0  # Adjust sensitivity as needed
+#SERIAL_START_BYTE = b'\xAA'
+
+ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=SERIAL_TIMEOUT)
+
+def audio_callback(indata, frames, time, status):
+    
+    # indata[:,0] grabs the first channel (mono)
+    samples = indata[:,0]
+
+    # Compute RMS (volume)
+    rms = np.sqrt(np.mean(samples**2))
+
+    # Scale RMS to 0-255 for Teensy
+    volume_byte = int(np.clip(rms * 255 * SENSITIVITY, 0, 255))
+
+    # Send single byte
+    ser.write(bytes([volume_byte]))
+
+
+
+
+stream = sd.InputStream(
+    samplerate=AUDIO_SAMPLE_RATE,
+    channels=1,
+    dtype='float32',
+    blocksize=AUDIO_BLOCK_SIZE,
+    callback=audio_callback
+)
+
+print("Starting audio stream...")
+
+with stream:
+    while True:
+        pass
