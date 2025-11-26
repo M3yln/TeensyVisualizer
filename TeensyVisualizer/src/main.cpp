@@ -41,23 +41,51 @@ void setup() {
 
 
 void loop() {
-    while (Serial.available()) {
-        int volume = Serial.read();  // 0-255
-        updateBarGraph(volume);
-    }
+  //   while (Serial.available()) {
+  //       int volume = Serial.read();  // 0-255
+  //       updateBarGraph(volume);
+  //   }
 
-  display.clearBuffer();
-  display.drawStr(TITLE_X_OFFSET, TEXT_OFFSET, "Audio IN:");
-  int barWidth = SCREEN_WIDTH / NUM_BARS;
+  // display.clearBuffer();
+  // display.drawStr(TITLE_X_OFFSET, TEXT_OFFSET, "Audio IN:");
+  // int barWidth = SCREEN_WIDTH / NUM_BARS;
 
-  for (int i = 0; i < NUM_BARS; i++) {
-    int h = bars[i];
-    int x = i * barWidth;
-    int y = SCREEN_HEIGHT - h;
-    display.drawBox(x, y, barWidth - 1, h);
-  }
-  display.sendBuffer();
+  // for (int i = 0; i < NUM_BARS; i++) {
+  //   int h = bars[i];
+  //   int x = i * barWidth;
+  //   int y = SCREEN_HEIGHT - h;
+  //   display.drawBox(x, y, barWidth - 1, h);
+  // }
+  // display.sendBuffer();
   // delay(5);
+    if (Serial.available() > 0) {
+        int b = Serial.read();
+        if (b == 0xAA) {
+
+            // Wait for full packet (128 * 2 = 256 bytes)
+            while (Serial.available() < 256) {
+                // wait
+            }
+
+            uint8_t peak[128];
+            uint8_t trough[128];
+
+            // Read all 256 bytes
+            for (int i = 0; i < 128; i++) {
+                peak[i] = Serial.read();
+                trough[i] = Serial.read();
+            }
+
+            // Draw waveform
+            display.clearBuffer();
+            for (int x = 0; x < 128; x++) {
+                int yPeak   = map(peak[x],   0, 255, SCREEN_HEIGHT-1, 0);
+                int yTrough = map(trough[x], 0, 255, SCREEN_HEIGHT-1, 0);
+                display.drawLine(x, yPeak, x, yTrough);
+            }
+            display.sendBuffer();
+        }
+    }
 }
 
 int smooth(int oldValue, int newValue) {

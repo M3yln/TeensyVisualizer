@@ -9,23 +9,48 @@ AUDIO_BLOCK_SIZE = 1024
 SERIAL_TIMEOUT = 1  # seconds
 AUDIO_DURATION = 10  # seconds
 SENSITIVITY = 10.0  # Adjust sensitivity as needed
+DISPLAY_WIDTH = 128
 #SERIAL_START_BYTE = b'\xAA'
 
 ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=SERIAL_TIMEOUT)
 
 def audio_callback(indata, frames, time, status):
     
-    # indata[:,0] grabs the first channel (mono)
-    samples = indata[:,0]
+    # # indata[:,0] grabs the first channel (mono)
+    # samples = indata[:,0]
 
-    # Compute RMS (volume)
-    rms = np.sqrt(np.mean(samples**2))
+    # # Compute RMS (volume)
+    # rms = np.sqrt(np.mean(samples**2))
 
-    # Scale RMS to 0-255 for Teensy
-    volume_byte = int(np.clip(rms * 255 * SENSITIVITY, 0, 255))
+    # # Scale RMS to 0-255 for Teensy
+    # volume_byte = int(np.clip(rms * 255 * SENSITIVITY, 0, 255))
 
-    # Send single byte
-    ser.write(bytes([volume_byte]))
+    # # Send single byte
+    # ser.write(bytes([volume_byte]))
+
+    samples = indata[:,0].astype(np.float32)
+
+    # Split into 128 groups
+    grouped = samples.reshape(DISPLAY_WIDTH, -1)
+
+    # Peak detection for each group
+    peaks = grouped.max(axis=1)
+    troughs = grouped.min(axis=1)
+
+    # Normalize to 0–255
+    peaks = ((peaks + 1) * 127.5).astype(np.uint8)
+    troughs = ((troughs + 1) * 127.5).astype(np.uint8)
+
+    # Send start byte
+    ser.write(b'\xAA')
+
+    # Interleave: [peak0, trough0, peak1, trough1, ...]
+    buf = bytearray(DISPLAY_WIDTH * 2)
+    for i in range(DISPLAY_WIDTH):
+        buf[2*i] = peaks[i]
+        buf[2*i+1] = troughs[i]
+
+    ser.write(buf)
 
 
 
@@ -33,7 +58,6 @@ def audio_callback(indata, frames, time, status):
 stream = sd.InputStream(
     samplerate=AUDIO_SAMPLE_RATE,
     channels=1,
-    dtype='float32',
     blocksize=AUDIO_BLOCK_SIZE,
     callback=audio_callback
 )
