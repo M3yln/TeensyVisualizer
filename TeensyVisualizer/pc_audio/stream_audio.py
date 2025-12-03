@@ -30,8 +30,10 @@ def audio_callback(indata, frames, time, status):
 
     samples = indata[:,0].astype(np.float32)
 
+    amplified = samples * SENSITIVITY
+
     # Split into 128 groups
-    grouped = samples.reshape(DISPLAY_WIDTH, -1)
+    grouped = amplified.reshape(DISPLAY_WIDTH, -1)
 
     # Peak detection for each group
     peaks = grouped.max(axis=1)
@@ -66,4 +68,9 @@ print("Starting audio stream...")
 
 with stream:
     while True:
-        pass
+        while ser.in_waiting >= 2:
+            b = ser.read(1)
+            if b == b'\xFE': # this packet is for sensitivity
+                new_sensitivity = ser.read(1)[0]
+                SENSITIVITY = new_sensitivity / 32
+                print(f"New sensitivity: {SENSITIVITY}")
