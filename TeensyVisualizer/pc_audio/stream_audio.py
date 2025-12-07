@@ -14,23 +14,25 @@ DISPLAY_WIDTH = 128
 
 ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=SERIAL_TIMEOUT)
 
-def audio_callback(indata, frames, time, status):
+def form_bargraph_cb(indata, frames, time, status):
+    # indata[:,0] grabs the first channel (mono)
+    samples = indata[:,0]
+
+    # Compute RMS (volume)
+    rms = np.sqrt(np.mean(samples**2))
+
+    # Scale RMS to 0-255 for Teensy
+    volume_byte = int(np.clip(rms * 255 * SENSITIVITY, 0, 255))
+
+    # Send single byte
+    ser.write(b'\xAB')  # Start byte for bargraph mode
+    ser.write(bytes([volume_byte]))
     
-    # # indata[:,0] grabs the first channel (mono)
-    # samples = indata[:,0]
 
-    # # Compute RMS (volume)
-    # rms = np.sqrt(np.mean(samples**2))
-
-    # # Scale RMS to 0-255 for Teensy
-    # volume_byte = int(np.clip(rms * 255 * SENSITIVITY, 0, 255))
-
-    # # Send single byte
-    # ser.write(bytes([volume_byte]))
-
+def form_waveform_cb(indata, frames, time, status):
     samples = indata[:,0].astype(np.float32)
 
-    amplified = samples * SENSITIVITY
+    amplified = np.clip(samples * SENSITIVITY, -1, 1)
 
     # Split into 128 groups
     grouped = amplified.reshape(DISPLAY_WIDTH, -1)
@@ -54,6 +56,8 @@ def audio_callback(indata, frames, time, status):
 
     ser.write(buf)
 
+    
+
 
 
 
@@ -61,7 +65,7 @@ stream = sd.InputStream(
     samplerate=AUDIO_SAMPLE_RATE,
     channels=1,
     blocksize=AUDIO_BLOCK_SIZE,
-    callback=audio_callback
+    callback=form_waveform_cb
 )
 
 print("Starting audio stream...")
@@ -73,4 +77,13 @@ with stream:
             if b == b'\xFE': # this packet is for sensitivity
                 new_sensitivity = ser.read(1)[0]
                 SENSITIVITY = new_sensitivity / 32
-                print(f"New sensitivity: {SENSITIVITY}")
+                #print(f"New sensitivity: {SENSITIVITY}")
+            if b == b'\xFD': # this packet is for switching between modes
+                mode = ser.read(1)[0]
+                if mode == 0:
+                    waveform_buffer = []
+                    stream.callback = form_bargraph_cb
+                    print("Switched to volume mode")
+                elif mode == 1:
+                    stream.callback = form_waveform_cb
+                    print("Switched to waveform mode")
