@@ -9,8 +9,11 @@ BAUD_RATE = 115200
 AUDIO_SAMPLE_RATE = 44100
 AUDIO_BLOCK_SIZE = 1024   # must be a multiple of DISPLAY_WIDTH
 SERIAL_TIMEOUT = 0.01
-SENSITIVITY = 0.5        # starting sensitivity 
+SENSITIVITY = 2        # starting sensitivity 
+SENSITIVITY_AUTO = 1.0  # auto gain factor
+peak_history = []
 DISPLAY_WIDTH = 128       # must match Teensy display width
+MAX_HISTORY = 50     # number of peak history samples to keep
 ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=SERIAL_TIMEOUT)
 
 current_mode = 1  # 0 = bargraph, 1 = waveform
@@ -48,21 +51,31 @@ def send_mode(mode):
 
 # --- audio callback: single callback, chooses based on current_mode ---
 def audio_callback(indata, frames, time_info, status):
-    global current_mode, SENSITIVITY
+    global current_mode, SENSITIVITY, peak_history, SENSITIVITY_AUTO
     # keep everything float32 in range -1..1 (sounddevice usually gives -1..1)
     samples = indata[:, 0].astype(np.float32)
+    current_peak = np.max(np.abs(samples))
+
+    # update peak history for auto gain    
+    peak_history.append(current_peak)
+    if len(peak_history) > MAX_HISTORY:
+        peak_history.pop(0)
+
+        max_peak = max(peak_history) if peak_history else 1.0
+        auto_gain = 1.0 / max_peak
+        SENSITIVITY_AUTO = np.clip(auto_gain, 0.1, 10.0) # adjust base sensitivity
 
     if current_mode == 0:
         # bargraph mode: use RMS
         rms = np.sqrt(np.mean(samples * samples))
-        volume_byte = int(np.clip(rms * 255 * SENSITIVITY, 0, 255))
+        volume_byte = int(np.clip(rms * 255 * SENSITIVITY * SENSITIVITY_AUTO, 0, 255))
         send_bargraph(volume_byte)
         # debug:
         print("Sent BAR", volume_byte)
     else:
         # waveform mode: compute peaks/troughs per column
         # amplified then clipped
-        amplified = samples * SENSITIVITY
+        amplified = samples * SENSITIVITY * SENSITIVITY_AUTO
         amplified = np.clip(amplified, -1.0, 1.0)
 
         # ensure frames divides evenly into DISPLAY_WIDTH
