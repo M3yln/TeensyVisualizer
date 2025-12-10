@@ -1,15 +1,13 @@
+// TeensyVisualizer.ino
 #include <Arduino.h>
 #include <SPI.h>
 #include <U8g2lib.h>
 #include <Wire.h>
 
-
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
-#define TEXT_OFFSET 10
-#define TITLE_X_OFFSET 38
 
-// SPI pins
+// SPI pins (if you need software SPI change constructor accordingly)
 #define OLED1_CS   10
 #define OLED1_DC    9
 #define OLED1_RST   8
@@ -19,138 +17,15 @@
 #define NUM_BARS 64
 uint8_t bars[NUM_BARS];
 
-#define AUDIO_SAMPLE_MAX 255
-
 U8G2_SSD1309_128X64_NONAME2_F_4W_HW_SPI display(U8G2_R0, OLED1_CS, OLED1_DC, OLED1_RST);
-void updateBarGraph(int sample);
-int smooth(int oldValue, int newValue);
-// float smoothedValue = 0.0;
-// float alpha = 0.1; // smoothing factor
-#define POT_PIN A0
-#define BUTTON_PIN 
-#define NUM_READINGS 20
 
-// Current display mode
-// 0 = Bar graph
-// 1 = Waveform
-uint8_t displayMode = 0;
-
-#define BUTTON_PIN 2
-#define DEBOUNCE_MS 50
-bool lastButtonState = HIGH;
-unsigned long lastDebounceTime = 0;
-
-int readings[NUM_READINGS];
-int readIndex = 0;
-int total = 0;
-int smoothedValue = 0;
-
-void setup() {
-  Serial.begin(115200);
-  analogReadResolution(10); // 10-bit ADC resolution, ranges 0-1023
-  SPI.setMOSI(OLED_MOSI);
-  SPI.setSCK(OLED_SCK);
-  display.begin();
-  display.setFont(u8g2_font_6x10_tf);
-  display.setFontRefHeightExtendedText();
-
-  for (int i = 0; i < NUM_BARS; i++) bars[i] = 0;
-  for (int i = 0; i < NUM_READINGS; i++) readings[i] = 0;
-
-  display.clearBuffer();
-  display.sendBuffer();
-}
-
-
-void loop() {
-  while (Serial.available()) {
-
-    uint8_t header = Serial.read();
-
-    // Waveform packet (512-byte payload)
-    if (header == 0xAA) {
-
-      while (Serial.available() < 256) {
-        // Wait for full packet
-      }
-
-      uint8_t peak[128];
-      uint8_t trough[128];
-
-      for (int i = 0; i < 128; i++) {
-        peak[i] = Serial.read();
-        trough[i] = Serial.read();
-      }
-
-      if (displayMode == 1) {
-        display.clearBuffer();
-        for (int x = 0; x < 128; x++) {
-          int yPeak   = map(peak[x],   0, 255, SCREEN_HEIGHT - 1, 0);
-          int yTrough = map(trough[x], 0, 255, SCREEN_HEIGHT - 1, 0);
-          display.drawLine(x, yPeak, x, yTrough);
-        }
-        display.sendBuffer();
-      }
-    }
-
-    // Sensitivity packet from potentiometer
-    else if (header == 0xFE) {
-      while (!Serial.available());
-      uint8_t pot = Serial.read();
-      // Just ignored here; Python uses it.
-    }
-
-    // Display mode switching packet
-    else if (header == 0xFD) {
-      while (!Serial.available());
-      displayMode = Serial.read();
-    }
-
-    // Bar-graph packet
-    else if (header == 0xAB) {
-      while (!Serial.available());
-      uint8_t vol = Serial.read();
-      if (displayMode == 0) {
-        drawBarGraph(vol);
-      }
-    }
-  }
-
-
-  // Read potentiometer and smooth value
-  total -= readings[readIndex];            // subtract the oldest reading
-  readings[readIndex] = analogRead(POT_PIN) / 4;  // read new value (0-255)
-  total += readings[readIndex];            // add the new reading
-
-  readIndex = (readIndex + 1) % NUM_READINGS; // advance index
-  smoothedValue = total / NUM_READINGS;    // compute average
-
-  Serial.write(0xFE);
-  Serial.write((int)smoothedValue);          
-
-  // Read button state and send
-  bool reading = digitalRead(BUTTON_PIN);
-  if (reading != lastButtonState) {
-    lastDebounceTime = millis();
-  }
-
-  if ((millis() - lastDebounceTime) > DEBOUNCE_MS) {
-    if (reading == LOW && lastButtonState == HIGH) {
-      // Button pressed
-      displayMode = (displayMode + 1) % 2; // Toggle between 0 and 1
-      Serial.write(0xFD);
-      Serial.write(displayMode);
-    }
-  }
-
-  lastButtonState = reading;
-}
-
+// smoothing
 int smooth(int oldValue, int newValue) {
     if (newValue > oldValue) return newValue;  // instant rise
-    return (oldValue * 6 + newValue * 5) / 11; 
+    return (oldValue * 6 + newValue * 5) / 11;
 }
 
+// bargraph update
 void drawBarGraph(uint8_t volume) {
   int h = map(volume, 0, 255, 0, SCREEN_HEIGHT - 1);
   h = constrain(h, 0, SCREEN_HEIGHT - 1);
@@ -171,4 +46,161 @@ void drawBarGraph(uint8_t volume) {
   }
 
   display.sendBuffer();
+}
+
+#define POT_PIN A0
+#define BUTTON_PIN A17
+#define NUM_READINGS 20
+#define TAG_SIZE 4
+
+uint8_t displayMode = 1; // 0=bargraph, 1=waveform
+
+int readings[NUM_READINGS];
+int readIndex = 0;
+int total = 0;
+int smoothedValue = 0;
+
+// --- Tag-based parser state machine ---
+// The parser reads 4-byte tags followed by payloads of known length, allowing for
+// extensible commands from the PC side with data packets to be sent from Python 
+// to Teensy and vice versa.
+enum ParserState { READ_TAG, READ_PAYLOAD };
+ParserState parserState = READ_TAG;
+char tagBuf[TAG_SIZE];
+uint8_t tagIndex = 0;
+
+const int MAX_PAYLOAD = 256;
+uint8_t payloadBuf[MAX_PAYLOAD];
+int payloadLenExpected = 0;
+int payloadIndex = 0;
+
+void setup() {
+  Serial.begin(115200);
+  analogReadResolution(10); // 0..1023
+  SPI.setMOSI(OLED_MOSI);
+  SPI.setSCK(OLED_SCK);
+
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  display.begin();
+  display.setFont(u8g2_font_6x10_tf);
+  display.setFontRefHeightExtendedText();
+
+  for (int i = 0; i < NUM_BARS; i++) bars[i] = 0;
+  for (int i = 0; i < NUM_READINGS; i++) readings[i] = 0;
+
+  display.clearBuffer();
+  display.sendBuffer();
+}
+
+// helper to send tags back to Python
+void send_tag_with_byte(const char* tag, uint8_t value) {
+  Serial.write((const uint8_t*)tag, TAG_SIZE);
+  Serial.write(value);
+}
+
+void process_full_packet(const char* tag, uint8_t* buf, int len) {
+  if (memcmp(tag, "WAVE", TAG_SIZE) == 0) {
+    if (len < 256) return; 
+    if (displayMode == 1) {
+      display.clearBuffer();
+      for (int x = 0; x < 128; x++) {
+        int yPeak   = map(buf[2*x],   0, 255, SCREEN_HEIGHT - 1, 0);
+        int yTrough = map(buf[2*x+1], 0, 255, SCREEN_HEIGHT - 1, 0);
+        display.drawLine(x, yPeak, x, yTrough);
+      }
+      display.sendBuffer();
+    }
+  } else if (memcmp(tag, "BAR ", TAG_SIZE) == 0) {
+    if (len < 1) return;
+    uint8_t vol = buf[0];
+    if (displayMode == 0) {
+      drawBarGraph(vol);
+    }
+  } else if (memcmp(tag, "POT ", TAG_SIZE) == 0) {
+    // Teensy doesn't need to act on POT packets (Python uses them). Ignore.
+  } else if (memcmp(tag, "MODE", TAG_SIZE) == 0) {
+    if (len < 1) return;
+    displayMode = buf[0];
+  } else {
+    // unknown tag: ignore
+  }
+}
+
+unsigned long lastPotSendMs = 0;
+const unsigned long POT_SEND_INTERVAL_MS = 80; // how often Teensy sends POT to Python
+
+void loop() {
+  // --- 1) Serial parser (non-blocking) ---
+  while (Serial.available() > 0) {
+    uint8_t b = (uint8_t)Serial.read();
+
+    if (parserState == READ_TAG) {
+      tagBuf[tagIndex++] = (char)b;
+      if (tagIndex >= TAG_SIZE) {
+        // tag complete, decide expected payload length
+        if (memcmp(tagBuf, "WAVE", TAG_SIZE) == 0) payloadLenExpected = 256;
+        else if (memcmp(tagBuf, "BAR ", TAG_SIZE) == 0) payloadLenExpected = 1;
+        else if (memcmp(tagBuf, "POT ", TAG_SIZE) == 0) payloadLenExpected = 1;
+        else if (memcmp(tagBuf, "MODE", TAG_SIZE) == 0) payloadLenExpected = 1;
+        else {
+          // unknown tag: reset and continue
+          tagIndex = 0;
+          parserState = READ_TAG;
+          continue;
+        }
+        // move to payload read state
+        payloadIndex = 0;
+        parserState = READ_PAYLOAD;
+      }
+    } else if (parserState == READ_PAYLOAD) {
+      // store payload bytes
+      if (payloadIndex < MAX_PAYLOAD) {
+        payloadBuf[payloadIndex++] = b;
+      } else {
+        // overflow (shouldn't happen if payloadLenExpected <= MAX_PAYLOAD)
+        payloadIndex++;
+      }
+
+      // if payload complete, process it
+      if (payloadIndex >= payloadLenExpected) {
+        process_full_packet(tagBuf, payloadBuf, payloadIndex);
+        // reset parser for next tag
+        tagIndex = 0;
+        parserState = READ_TAG;
+        payloadIndex = 0;
+      }
+    }
+  }
+
+  // send smoothed pot to Python periodically
+  // smoothing running average
+  total -= readings[readIndex];
+  readings[readIndex] = analogRead(POT_PIN) / 4; // 0..255
+  total += readings[readIndex];
+  readIndex = (readIndex + 1) % NUM_READINGS;
+  smoothedValue = total / NUM_READINGS;
+
+  unsigned long now = millis();
+  if (now - lastPotSendMs >= POT_SEND_INTERVAL_MS) {
+    lastPotSendMs = now;
+    send_tag_with_byte("POT ", (uint8_t)smoothedValue);
+  }
+
+  // handle button press (debounced with simple delay)
+  static unsigned long lastButtonToggleMs = 0;
+  const unsigned long BUTTON_DEBOUNCE_MS = 200;
+
+  if (digitalRead(BUTTON_PIN) == LOW) {
+    unsigned long t = millis();
+    if (t - lastButtonToggleMs > BUTTON_DEBOUNCE_MS) {
+      // toggle
+      displayMode = (displayMode + 1) % 2;
+      // inform Python
+      send_tag_with_byte("MODE", displayMode);
+      lastButtonToggleMs = t;
+      // small wait while button released (avoid bounce loops)
+      delay(20);
+    }
+  }
+  delay(1);
 }
