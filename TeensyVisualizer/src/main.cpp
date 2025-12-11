@@ -48,12 +48,39 @@ void drawBarGraph(uint8_t volume) {
   display.sendBuffer();
 }
 
+void drawFFT(uint8_t *bins, int binCount) {
+    display.clearBuffer();
+
+    int pixelsPerBin = SCREEN_WIDTH / binCount;  // 128 / 64 = 2 px per bin
+
+    // safety fallback:
+    if (pixelsPerBin < 1) pixelsPerBin = 1;
+
+    for (int i = 0; i < binCount; i++) {
+        uint8_t mag = bins[i];  // 0–255 magnitude from Python
+
+        // scale 0–255 → 0–SCREEN_HEIGHT
+        int scaledHeight = (mag * SCREEN_HEIGHT) / 255;
+
+        // bottom-aligned bar
+        int x = i * pixelsPerBin;
+        int y = SCREEN_HEIGHT - scaledHeight;
+        // draw vertical bar
+        display.drawBox(x, y, pixelsPerBin, scaledHeight);
+    }
+
+    display.sendBuffer();
+}
+
+
 #define POT_PIN A0
 #define BUTTON_PIN A17
 #define NUM_READINGS 20
 #define TAG_SIZE 4
+#define FFT_WIDTH 32
+uint8_t fft_bins[FFT_WIDTH];
 
-uint8_t displayMode = 1; // 0=bargraph, 1=waveform
+uint8_t displayMode = 1; // 0=bargraph, 1=waveform, 2=FFT
 
 int readings[NUM_READINGS];
 int readIndex = 0;
@@ -121,7 +148,14 @@ void process_full_packet(const char* tag, uint8_t* buf, int len) {
   } else if (memcmp(tag, "MODE", TAG_SIZE) == 0) {
     if (len < 1) return;
     displayMode = buf[0];
-  } else {
+  } else if (memcmp(tag, "FFT ", TAG_SIZE) == 0) 
+  {
+    if (len < FFT_WIDTH) return;
+    if (displayMode == 2) {
+      drawFFT(buf, FFT_WIDTH);
+    }
+  } else
+  {
     // unknown tag: ignore
   }
 }
@@ -142,6 +176,7 @@ void loop() {
         else if (memcmp(tagBuf, "BAR ", TAG_SIZE) == 0) payloadLenExpected = 1;
         else if (memcmp(tagBuf, "POT ", TAG_SIZE) == 0) payloadLenExpected = 1;
         else if (memcmp(tagBuf, "MODE", TAG_SIZE) == 0) payloadLenExpected = 1;
+        else if (memcmp(tagBuf, "FFT ", TAG_SIZE) == 0) payloadLenExpected = 64;
         else {
           // unknown tag: reset and continue
           tagIndex = 0;
@@ -194,7 +229,7 @@ void loop() {
     unsigned long t = millis();
     if (t - lastButtonToggleMs > BUTTON_DEBOUNCE_MS) {
       // toggle
-      displayMode = (displayMode + 1) % 2;
+      displayMode = (displayMode + 1) % 3;
       // inform Python
       send_tag_with_byte("MODE", displayMode);
       lastButtonToggleMs = t;

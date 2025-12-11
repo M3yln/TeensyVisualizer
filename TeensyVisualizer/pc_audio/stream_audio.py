@@ -13,10 +13,15 @@ SENSITIVITY = 2        # starting sensitivity
 SENSITIVITY_AUTO = 1.0  # auto gain factor
 peak_history = []
 DISPLAY_WIDTH = 128       # must match Teensy display width
+
+FFT_WIDTH = 32  # number of FFT bins to display (must fit your OLED)
+FFT_SENSITIVITY = 10.0  # scale FFT magnitude
+
+current_mode = 0  # start in bargraph mode
 MAX_HISTORY = 50     # number of peak history samples to keep
 ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=SERIAL_TIMEOUT)
 
-current_mode = 1  # 0 = bargraph, 1 = waveform
+mode_names = {0: "bargraph", 1: "waveform", 2: "fft"}
 
 # --- packet send helpers (tags are 4 ASCII bytes) ---
 def send_waveform(peaks, troughs):
@@ -49,6 +54,29 @@ def send_mode(mode):
     except Exception:
         pass
 
+def sent_fft(samples):
+    fft_result = np.fft.rfft(samples)
+    magnitudes = np.abs(fft_result)
+
+    bins = magnitudes[:FFT_WIDTH]
+
+    bins_scaled = (bins * FFT_SENSITIVITY)
+    bins_scaled = np.clip(bins_scaled, 0, 255).astype(np.uint8)
+
+    print ("FFT bins:", bins_scaled)
+
+    try:
+        ser.write(b"FFT " + bytes(bins_scaled))
+    except Exception:
+        pass
+
+def get_log_bins(magnitudes, num_bins):
+    fft_len = len(magnitudes)
+    log_indicies = np.logspace(0, np.log10(fft_len-1), endpoint=True, base=10.0)
+    log_indicies = np.round(log_indicies).astype(int)
+    log_indicies = np.clip(log_indicies, 0, fft_len-1)
+    return magnitudes[log_indicies]
+    
 # --- audio callback: single callback, chooses based on current_mode ---
 def audio_callback(indata, frames, time_info, status):
     global current_mode, SENSITIVITY, peak_history, SENSITIVITY_AUTO
@@ -72,7 +100,7 @@ def audio_callback(indata, frames, time_info, status):
         send_bargraph(volume_byte)
         # debug:
         print("Sent BAR", volume_byte)
-    else:
+    elif current_mode == 1:
         # waveform mode: compute peaks/troughs per column
         # amplified then clipped
         amplified = samples * SENSITIVITY * SENSITIVITY_AUTO
@@ -100,6 +128,10 @@ def audio_callback(indata, frames, time_info, status):
         send_waveform(peaks_u, troughs_u)
         # debug:
         print("Sent WAVE")
+    elif current_mode == 2:
+        # FFT mode
+        sent_fft(samples)
+        print("Sent FFT")
 
 
 # def audio_callback(indata, frames, time_info, status):
@@ -140,7 +172,7 @@ with stream:
                         time.sleep(0.001)
                     mode = ord(ser.read(1))
                     current_mode = int(mode)
-                    print(f"Switched to {'bargraph' if mode == 0 else 'waveform'} mode (from Teensy)")
+                    print(f"Switched to {mode_names.get(mode, 'unknown')} mode (from Teensy)")
                 else:
                     # Unknown tag from Teensy. If Teensy ever sends other info, handle here.
                     # read and discard a single byte to avoid lock (optional)
