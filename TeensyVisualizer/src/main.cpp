@@ -126,7 +126,8 @@ void send_tag_with_byte(const char* tag, uint8_t value) {
 }
 
 void process_full_packet(const char* tag, uint8_t* buf, int len) {
-  if (memcmp(tag, "WAVE", TAG_SIZE) == 0) {
+  if (memcmp(tag, "WAVE", TAG_SIZE) == 0) 
+  {
     if (len < 256) return; 
     if (displayMode == 1) {
       display.clearBuffer();
@@ -137,24 +138,35 @@ void process_full_packet(const char* tag, uint8_t* buf, int len) {
       }
       display.sendBuffer();
     }
-  } else if (memcmp(tag, "BAR ", TAG_SIZE) == 0) {
+  } 
+  else if (memcmp(tag, "BAR ", TAG_SIZE) == 0) 
+  {
     if (len < 1) return;
     uint8_t vol = buf[0];
     if (displayMode == 0) {
       drawBarGraph(vol);
     }
-  } else if (memcmp(tag, "POT ", TAG_SIZE) == 0) {
+  } 
+  else if (memcmp(tag, "POT ", TAG_SIZE) == 0) 
+  {
     // Teensy doesn't need to act on POT packets (Python uses them). Ignore.
-  } else if (memcmp(tag, "MODE", TAG_SIZE) == 0) {
+  } 
+  else if (memcmp(tag, "MODE", TAG_SIZE) == 0) 
+  {
     if (len < 1) return;
     displayMode = buf[0];
-  } else if (memcmp(tag, "FFT ", TAG_SIZE) == 0) 
+  } 
+  else if (memcmp(tag, "FFT ", TAG_SIZE) == 0) 
   {
     if (len < FFT_WIDTH) return;
-    if (displayMode == 2) {
-      drawFFT(buf, FFT_WIDTH);
+    for (int i = 0; i < FFT_WIDTH; i++) {
+        fft_bins[i] = smooth(fft_bins[i], buf[i]);
     }
-  } else
+    if (displayMode == 2) {
+        drawFFT(fft_bins, FFT_WIDTH);
+    }
+  } 
+  else
   {
     // unknown tag: ignore
   }
@@ -176,7 +188,7 @@ void loop() {
         else if (memcmp(tagBuf, "BAR ", TAG_SIZE) == 0) payloadLenExpected = 1;
         else if (memcmp(tagBuf, "POT ", TAG_SIZE) == 0) payloadLenExpected = 1;
         else if (memcmp(tagBuf, "MODE", TAG_SIZE) == 0) payloadLenExpected = 1;
-        else if (memcmp(tagBuf, "FFT ", TAG_SIZE) == 0) payloadLenExpected = 64;
+        else if (memcmp(tagBuf, "FFT ", TAG_SIZE) == 0) payloadLenExpected = FFT_WIDTH;
         else {
           // unknown tag: reset and continue
           tagIndex = 0;
